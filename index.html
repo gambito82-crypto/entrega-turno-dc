@@ -6,7 +6,7 @@
   <title>Entrega de Turno — Data Centers</title>
   <meta name="description" content="Sistema de entrega de turno para Data Centers: San Martín, Apoquindo y Paine">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.2/html2pdf.bundle.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <style>
 :root {
   --bg-color: #0b1120;
@@ -586,6 +586,10 @@ textarea:focus { outline: none; border-color: currentColor; }
       <label>📝 OBSERVACIONES GENERALES</label>
       <textarea id="ho-observaciones" rows="2" placeholder="Comentarios adicionales, novedades, alertas..."></textarea>
     </div>
+    <div class="form-section" style="background:rgba(69,39,160,0.12);color:#a78bfa;border-top:1px solid rgba(167,139,250,0.2);border-bottom:1px solid rgba(167,139,250,0.2);margin-bottom:24px;padding:20px;border-radius:8px;">
+      <label style="display:block;font-size:11px;font-weight:800;text-transform:uppercase;margin-bottom:12px;letter-spacing:.6px;">🏛 FACILITY / EDIFICIO</label>
+      <textarea id="ho-facility" rows="2" placeholder="Estado del edificio, climatizacion, UPS, generadores, accesos..."></textarea>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="saveHandover()">💾 Guardar Entrega</button>
@@ -606,6 +610,7 @@ const DC_LABELS      = { SanMartin: 'DC San Martín', Apoquindo: 'DC Apoquindo',
 const DC_BADGE_CLASS = { SanMartin: 'sm', Apoquindo: 'aq', Paine: 'pn' };
 const DC_CARD_CLASS  = { SanMartin: 'dc-sm', Apoquindo: 'dc-aq', Paine: 'dc-pn' };
 const STORAGE_KEY    = 'entrega_turno_data_v2';
+const COUNTER_KEY    = 'entrega_turno_counter';
 
 const WORKERS = {
   SanMartin: [
@@ -814,7 +819,7 @@ function openAdd(dc) {
   else                  sel.value = '8:00-17:45 (Mañana)';
 
   populateWorkers(dc);
-  ['ho-trabajos','ho-ejecucion','ho-pendientes','ho-observaciones'].forEach(id => {
+  ['ho-trabajos','ho-ejecucion','ho-pendientes','ho-observaciones','ho-facility'].forEach(id => {
     document.getElementById(id).value = '';
   });
   document.getElementById('modal').classList.add('open');
@@ -838,6 +843,7 @@ function editHandover(id) {
   document.getElementById('ho-ejecucion').value    = h.ejecucion   || '';
   document.getElementById('ho-pendientes').value   = h.pendientes  || '';
   document.getElementById('ho-observaciones').value = h.observaciones || '';
+  document.getElementById('ho-facility').value      = h.facility      || '';
   document.getElementById('modal').classList.add('open');
 }
 
@@ -866,6 +872,7 @@ function saveHandover() {
   const ejecucion    = document.getElementById('ho-ejecucion').value.trim();
   const pendientes   = document.getElementById('ho-pendientes').value.trim();
   const observaciones = document.getElementById('ho-observaciones').value.trim();
+  const facility      = document.getElementById('ho-facility').value.trim();
 
   if (!fecha || !entrega || !recibe) { alert('Completa al menos: fecha, quién entrega y quién recibe.'); return; }
   if (entrega === recibe)            { alert('La persona que entrega y recibe no pueden ser la misma.'); return; }
@@ -874,12 +881,12 @@ function saveHandover() {
   if (editId) {
     const idx = handovers.findIndex(h => h.id === editId);
     if (idx >= 0) {
-      handovers[idx] = { ...handovers[idx], dc, fecha, turno, entrega, recibe, trabajos, ejecucion, pendientes, observaciones };
+      handovers[idx] = { ...handovers[idx], dc, fecha, turno, entrega, recibe, trabajos, ejecucion, pendientes, observaciones, facility };
     }
   } else {
     handovers.push({
       id: 'ho_' + Date.now() + '_' + Math.random().toString(36).substr(2,6),
-      dc, fecha, hora:'', turno, entrega, recibe, trabajos, ejecucion, pendientes, observaciones,
+      dc, fecha, hora:'', turno, entrega, recibe, trabajos, ejecucion, pendientes, observaciones, facility,
       created_at: new Date().toISOString()
     });
   }
@@ -981,67 +988,243 @@ function updateDCStatus() {
   }
 }
 
-function buildPrintHTML() {
-  const d = new Date();
-  const fechaLabel = d.toLocaleDateString('es-CL', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
-  const dcColors = { SanMartin:'#22d3ee', Apoquindo:'#a78bfa', Paine:'#34d399' };
-  let html = `<div style="font-family:'Segoe UI',system-ui,sans-serif;color:#1a1a1a;width:100%;max-width:800px;margin:0 auto">
-    <div style="text-align:center;padding:20px 0;border-bottom:3px solid #22d3ee;margin-bottom:24px">
-      <h1 style="font-size:22px;color:#0e7490;margin:0 0 4px">⚡ Informe Consolidado de Entrega de Turno</h1>
-      <p style="font-size:14px;color:#374151;margin:0;font-weight:600">${fechaLabel}</p>
-      <p style="font-size:12px;color:#6b7280;margin:4px 0 0">3 Data Centers</p>
-    </div>`;
+// ── PDF Generator (jsPDF — 3 columnas horizontales) ──
+function resetApp() {
+  // preserve counter
+  const count = localStorage.getItem(COUNTER_KEY);
+  try { localStorage.removeItem(STORAGE_KEY); } catch(e) {}
+  if (count) localStorage.setItem(COUNTER_KEY, count);
+  handovers = [];
+  render();
+  showToast('🔄 Sistema reiniciado para el siguiente turno');
+}
 
-  DC_LIST.forEach(dc => {
-    const h = getLatestHandover(dc);
-    if (!h) return;
-    const color = dcColors[dc];
-    html += `<div style="border:1px solid #e5e7eb;border-radius:10px;padding:0;margin-bottom:20px;overflow:hidden;page-break-inside:avoid">
-      <div style="background:${color};padding:12px 18px;color:#fff"><strong style="font-size:15px">🏢 ${DC_LABELS[dc]}</strong></div>
-      <div style="padding:16px 18px">
-        <table style="width:100%;border-collapse:collapse;font-size:13px">
-          <tr><td style="padding:4px 0;color:#6b7280;width:120px"><strong>Fecha y Turno:</strong></td><td>${h.fecha} · ${h.turno||'—'}</td></tr>
-          <tr><td style="padding:4px 0;color:#6b7280"><strong>Entrega:</strong></td><td style="color:#0e7490;font-weight:600">${h.entrega}</td></tr>
-          <tr><td style="padding:4px 0;color:#6b7280"><strong>Recibe:</strong></td><td style="color:#0e7490;font-weight:600">${h.recibe}</td></tr>
-        </table>
-        <div style="margin-top:16px">
-          <div style="font-size:11px;font-weight:700;color:#059669;text-transform:uppercase;margin-bottom:4px">✅ TRABAJOS REALIZADOS</div>
-          <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:3px solid #22c55e;padding:10px 14px;border-radius:6px;font-size:13px;white-space:pre-wrap;line-height:1.6;color:${h.trabajos?'inherit':'#9ca3af'}">${h.trabajos||'Sin registros'}</div>
-        </div>
-        <div style="margin-top:12px">
-          <div style="font-size:11px;font-weight:700;color:#0284c7;text-transform:uppercase;margin-bottom:4px">🔧 TRABAJOS EN EJECUCIÓN</div>
-          <div style="background:#f0f9ff;border:1px solid #bae6fd;border-left:3px solid #38bdf8;padding:10px 14px;border-radius:6px;font-size:13px;white-space:pre-wrap;line-height:1.6;color:${h.ejecucion?'inherit':'#9ca3af'}">${h.ejecucion||'Sin registros'}</div>
-        </div>
-        <div style="margin-top:12px">
-          <div style="font-size:11px;font-weight:700;color:#d97706;text-transform:uppercase;margin-bottom:4px">⏳ ACTIVIDADES PENDIENTES</div>
-          <div style="background:#fffbeb;border:1px solid #fde68a;border-left:3px solid #f59e0b;padding:10px 14px;border-radius:6px;font-size:13px;white-space:pre-wrap;line-height:1.6;color:${h.pendientes?'inherit':'#9ca3af'}">${h.pendientes||'Sin registros'}</div>
-        </div>
-        <div style="margin-top:12px">
-          <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:4px">📝 OBSERVACIONES</div>
-          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-left:3px solid #9ca3af;padding:10px 14px;border-radius:6px;font-size:13px;white-space:pre-wrap;line-height:1.6;color:${h.observaciones?'inherit':'#9ca3af'}">${h.observaciones||'Sin observaciones'}</div>
-        </div>
-      </div>
-    </div>`;
-  });
-  html += `<div style="text-align:center;padding:16px 0;border-top:2px solid #e5e7eb;font-size:11px;color:#9ca3af;margin-top:20px">
-    Entrega de Turno 2026 — Sistema de Gestión de Data Centers<br>San Martín · Apoquindo · Paine
-  </div></div>`;
-  return html;
+function hexRGB(hex) {
+  const h = hex.replace('#','');
+  return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+}
+function setFill(doc, hex) { const [r,g,b]=hexRGB(hex); doc.setFillColor(r,g,b); }
+function setTxt(doc, hex)  { const [r,g,b]=hexRGB(hex); doc.setTextColor(r,g,b); }
+function setDrw(doc, hex)  { const [r,g,b]=hexRGB(hex); doc.setDrawColor(r,g,b); }
+
+function wrapLines(doc, text, font, size, maxW) {
+  doc.setFont('helvetica', font); doc.setFontSize(size);
+  const result = [];
+  for (const raw of (text||'').split('\n')) {
+    const t = raw.trim(); if (!t) continue;
+    const words = ('• '+t).split(' ');
+    let line = '';
+    for (const w of words) {
+      const test = line ? line+' '+w : w;
+      if (doc.getTextWidth(test) <= maxW) { line = test; }
+      else { if (line) result.push(line); line = '  '+w; }
+    }
+    if (line) result.push(line);
+  }
+  return result;
+}
+
+function secHeight(doc, text, colW) {
+  if (!text||!text.trim()) return 0;
+  const lines = wrapLines(doc, text, 'normal', 12, colW - 20);
+  return 16 + 3 + lines.length * 15 + 5;
+}
+
+function drawServerIcon(doc, x, y, dotColor) {
+  // 3 stacked rack units
+  const sw=14, sh=4, gap=2;
+  doc.setLineWidth(0.3);
+  for (let i=0; i<3; i++) {
+    const ry = y - (i*(sh+gap));
+    setFill(doc,'#FFFFFF'); setDrw(doc,'#FFFFFF');
+    doc.roundedRect(x, ry, sw, sh, 0.8, 0.8, 'F');
+    // LED dot
+    setFill(doc, dotColor);
+    doc.circle(x+sw-3, ry+sh/2, 1, 'F');
+  }
+}
+
+function drawSectionIcon(doc, type, x, cy, color) {
+  setFill(doc, color); setDrw(doc, color);
+  doc.setLineWidth(1);
+
+  if (type === 'check') {
+    doc.circle(x+4, cy, 5, 'S');
+    doc.setLineWidth(1.5);
+    doc.lines([[2,-2.2],[3.5,4.7]], x+1.5, cy, [1,1], 'S');
+
+  } else if (type === 'nut') {
+    doc.setLineWidth(1);
+    const R=5.5, r=2.2, cx=x+4;
+    const pts = [];
+    for (let i=0;i<6;i++) {
+      const a = (Math.PI/180)*(90+i*60);
+      pts.push([cx + R*Math.cos(a), cy + R*Math.sin(a)]);
+    }
+    doc.lines(
+      pts.slice(1).map((p,i)=>[p[0]-pts[i][0], p[1]-pts[i][1]]).concat([[pts[0][0]-pts[5][0], pts[0][1]-pts[5][1]]]),
+      pts[0][0], pts[0][1], [1,1], 'S'
+    );
+    doc.circle(cx, cy, r, 'S');
+
+  } else if (type === 'clock') {
+    doc.circle(x+4, cy, 5, 'S');
+    doc.setLineWidth(1.2);
+    doc.lines([[0,3.5]], x+4, cy, [1,1], 'S');
+    doc.lines([[3,1.5]], x+4, cy, [1,1], 'S');
+
+  } else if (type === 'beacon') {
+    doc.lines([[4.5,-10],[4.5,0]], x-0.5, cy+5.5, [1,1], 'S');
+    setFill(doc, color);
+    doc.rect(x+3.2, cy-1, 1.6, 3.5, 'F');
+    doc.circle(x+4, cy-3.8, 0.9, 'F');
+
+  } else if (type === 'building') {
+    doc.setLineWidth(0.8);
+    doc.rect(x+1, cy-5.5, 7, 8.5, 'S');
+    doc.lines([[-1.5,-4],[5,0],[5,4]], x-0.5, cy+3, [1,1], 'S');
+    doc.rect(x+3.2, cy-5.5, 2, 3, 'S');
+    setFill(doc, color);
+    doc.rect(x+1.5, cy+0.5, 1.8, 1.8, 'F');
+    doc.rect(x+5.5, cy+0.5, 1.8, 1.8, 'F');
+  }
+}
+
+function drawSection(doc, x, y, colW, title, text, bgHex, accentHex, titleHex, iconType) {
+  if (!text||!text.trim()) return y;
+  const lines = wrapLines(doc, text, 'normal', 12, colW - 20);
+  const h = 16 + 3 + lines.length * 15 + 5;
+
+  setFill(doc, bgHex); setDrw(doc,'#DDDDDD');
+  doc.setLineWidth(0.1);
+  doc.rect(x, y-h, colW, h, 'F');
+
+  setFill(doc, accentHex);
+  doc.rect(x, y-h, 3, h, 'F');
+
+  drawSectionIcon(doc, iconType, x+7, y-10.5, titleHex);
+
+  setTxt(doc, titleHex);
+  doc.setFont('helvetica','bold'); doc.setFontSize(10.5);
+  doc.text(title, x+20, y-11);
+
+  setTxt(doc,'#1a1a1a');
+  doc.setFont('helvetica','normal'); doc.setFontSize(12);
+  let iy = y-11-15;
+  for (const line of lines) { doc.text(line, x+7, iy); iy -= 15; }
+
+  return y - h - 4;
 }
 
 function downloadConsolidatedReport() {
-  const htmlContent = buildPrintHTML();
-  const filename    = `Entrega_Turno_${dateKey(new Date())}.pdf`;
-  showToast('⏳ Generando PDF...');
-  html2pdf().set({
-    margin: [10,12,10,12], filename,
-    image: { type:'jpeg', quality:0.98 },
-    html2canvas: { scale:2, useCORS:true, backgroundColor:'#ffffff', scrollY:0 },
-    jsPDF: { unit:'mm', format:'a4', orientation:'portrait' },
-    pagebreak: { mode:['avoid-all','css','legacy'] }
-  }).from(htmlContent).save()
-    .then(() => showToast(`📥 PDF descargado: ${filename}`))
-    .catch(err => { console.error(err); showToast('❌ Error al generar PDF'); });
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:'pt', format:'a4', orientation:'landscape' });
+
+  const PW = doc.internal.pageSize.getWidth();
+  const PH = doc.internal.pageSize.getHeight();
+  const MARGIN = 20, GAP = 11, HDR = 52, FOOT = 20;
+  const COL_W = (PW - 2*MARGIN - 2*GAP) / 3;
+
+  const DC_CFG = {
+    SanMartin: { color:'#00BCD4', dark:'#006064' },
+    Apoquindo: { color:'#9C27B0', dark:'#4A148C' },
+    Paine:     { color:'#2E7D32', dark:'#1B5E20' },
+  };
+  const SECS = [
+    ['TRABAJOS REALIZADOS',    'trabajos',      '#E8F5E9','#2E7D32','#1B5E20','check'   ],
+    ['TRABAJOS EN EJECUCION',  'ejecucion',     '#E3F2FD','#1565C0','#0D47A1','nut'     ],
+    ['ACTIVIDADES PENDIENTES', 'pendientes',    '#FFF8E1','#E65100','#BF360C','clock'   ],
+    ['OBSERVACIONES',          'observaciones', '#FCE4EC','#C62828','#B71C1C','beacon'  ],
+    ['FACILITY / EDIFICIO',    'facility',      '#EDE7F6','#7B1FA2','#4A148C','building'],
+  ];
+
+  const fecha = new Date().toLocaleDateString('es-CL',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+
+  // ── Page bg ──
+  setFill(doc,'#ECEFF4'); doc.rect(0,0,PW,PH,'F');
+
+  // ── Header ──
+  setFill(doc,'#1A2B4A'); doc.rect(0, PH-HDR, PW, HDR, 'F');
+  setTxt(doc,'#00BCD4'); doc.setFont('helvetica','bold'); doc.setFontSize(20);
+  doc.text('Informe Consolidado de Entrega de Turno', PW/2, PH-HDR+22, {align:'center'});
+  setTxt(doc,'#90A4AE'); doc.setFont('helvetica','normal'); doc.setFontSize(13);
+  doc.text(fecha + '  ·  3 Data Centers', PW/2, PH-HDR+38, {align:'center'});
+
+  // ── 3 columns ──
+  DC_LIST.forEach((dc, i) => {
+    const h = getLatestHandover(dc);
+    if (!h) return;
+    const cfg = DC_CFG[dc];
+    const cx = MARGIN + i*(COL_W+GAP);
+    const cardTop = PH - HDR - 8;
+    const cardBot = FOOT + 6;
+    const cardH   = cardTop - cardBot;
+
+    // shadow
+    setFill(doc,'#C8CDD4');
+    doc.roundedRect(cx+2, cardBot-2, COL_W, cardH, 6, 6, 'F');
+    // white card
+    setFill(doc,'#FFFFFF'); setDrw(doc,'#CCCCCC'); doc.setLineWidth(0.4);
+    doc.roundedRect(cx, cardBot, COL_W, cardH, 6, 6, 'FD');
+
+    // DC header band
+    const BAND = 24;
+    setFill(doc, cfg.color);
+    doc.roundedRect(cx, cardTop-BAND, COL_W, BAND, 6, 6, 'F');
+    doc.rect(cx, cardTop-BAND, COL_W, BAND/2, 'F');
+
+    // server icon
+    drawServerIcon(doc, cx+8, cardTop-8, cfg.color);
+
+    // DC name
+    setTxt(doc,'#FFFFFF'); doc.setFont('helvetica','bold'); doc.setFontSize(14);
+    doc.text(DC_LABELS[dc], cx+28, cardTop-10);
+
+    let y = cardTop - BAND - 10;
+    const PAD = cx + 6;
+
+    // info rows
+    const infoRows = [
+      ['Fecha:',   h.fecha,             '#555555','#333333', false],
+      ['Turno:',   h.turno||'—',        '#555555','#333333', false],
+      ['Entrega:', h.entrega,           '#555555', cfg.color, true],
+      ['Recibe:',  h.recibe,            '#555555', cfg.color, true],
+    ];
+    for (const [lbl, val, lc, vc, bold] of infoRows) {
+      doc.setFont('helvetica','bold'); doc.setFontSize(11.5);
+      setTxt(doc, lc); doc.text(lbl, PAD, y);
+      doc.setFont('helvetica', bold?'bold':'normal'); doc.setFontSize(11.5);
+      setTxt(doc, vc);
+      // truncate if too wide
+      let v = val;
+      while (v.length>2 && doc.getTextWidth(v) > COL_W-62) v = v.slice(0,-2)+'…';
+      doc.text(v, PAD+48, y);
+      y -= 15;
+    }
+
+    // divider
+    y -= 3;
+    setDrw(doc,'#EEEEEE'); doc.setLineWidth(0.3);
+    doc.line(cx+4, y, cx+COL_W-4, y);
+    y -= 7;
+
+    // sections
+    for (const [title, key, bg, acc, tc, icon] of SECS) {
+      y = drawSection(doc, cx+4, y, COL_W-8, title, h[key]||'', bg, acc, tc, icon);
+    }
+
+    // bottom border
+    setDrw(doc,'#DDDDDD'); doc.setLineWidth(0.3);
+    doc.line(cx, y, cx+COL_W, y);
+  });
+
+  // ── Footer ──
+  setTxt(doc,'#999999'); doc.setFont('helvetica','normal'); doc.setFontSize(8);
+  doc.text('Entrega de Turno 2026 — Sistema de Gestion de Data Centers  ·  San Martin · Apoquindo · Paine', PW/2, 10, {align:'center'});
+
+  doc.save(`Entrega_Turno_${dateKey(new Date())}.pdf`);
+  showToast('📥 PDF descargado correctamente');
+  setTimeout(() => resetApp(), 1500);
 }
 
 // ── Toast ──────────────────────────────────────────
