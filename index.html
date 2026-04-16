@@ -7,6 +7,9 @@
   <meta name="description" content="Sistema de entrega de turno para Data Centers: San Martín, Apoquindo y Paine">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <style>
 :root {
   --bg-color: #0b1120;
@@ -577,8 +580,38 @@ textarea:focus { outline: none; border-color: currentColor; }
 
 <script>
 // ══════════════════════════════════════════════════
-// ENTREGA DE TURNO — GitHub Pages (localStorage)
+// ENTREGA DE TURNO — Firebase Realtime Database
+// Sincronización en tiempo real entre los 3 DC
 // ══════════════════════════════════════════════════
+
+// ┌──────────────────────────────────────────────┐
+// │  🔧 CONFIGURACIÓN DE FIREBASE                │
+// │  Reemplaza estos valores con los de tu       │
+// │  proyecto en console.firebase.google.com     │
+// └──────────────────────────────────────────────┘
+const FIREBASE_CONFIG = {
+  apiKey: "TU_API_KEY",
+  authDomain: "TU_PROYECTO.firebaseapp.com",
+  databaseURL: "https://TU_PROYECTO-default-rtdb.firebaseio.com",
+  projectId: "TU_PROYECTO",
+  storageBucket: "TU_PROYECTO.appspot.com",
+  messagingSenderId: "123456789",
+  appId: "TU_APP_ID"
+};
+
+// Initialize Firebase
+let firebaseApp, firebaseDB, firebaseRef;
+let firebaseConnected = false;
+
+try {
+  firebaseApp = firebase.initializeApp(FIREBASE_CONFIG);
+  firebaseDB  = firebase.database();
+  firebaseRef = firebaseDB.ref('handovers');
+  firebaseConnected = true;
+} catch(e) {
+  console.warn('⚠️ Firebase no configurado. Usando modo offline (localStorage).', e);
+  firebaseConnected = false;
+}
 
 const DC_LIST        = ['SanMartin','Apoquindo','Paine'];
 const DC_LABELS      = { SanMartin: 'DC San Martín', Apoquindo: 'DC Apoquindo', Paine: 'DC Paine' };
@@ -625,6 +658,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadHandovers();
   updateClock();
   setInterval(updateClock, 30000);
+  monitorConnection();
 });
 
 function updateClock() {
@@ -634,23 +668,98 @@ function updateClock() {
   });
 }
 
-// ── Persistence (localStorage only) ──────────────
+// ── Connection Monitor ───────────────────────────
+function monitorConnection() {
+  if (!firebaseConnected) {
+    setConnectionStatus(false, 'Modo Offline');
+    return;
+  }
+  const connRef = firebaseDB.ref('.info/connected');
+  connRef.on('value', (snap) => {
+    if (snap.val() === true) {
+      setConnectionStatus(true, 'Conectado');
+    } else {
+      setConnectionStatus(false, 'Desconectado');
+    }
+  });
+}
+
+function setConnectionStatus(online, label) {
+  const statusEl = document.querySelector('.header-status');
+  const dotEl    = document.querySelector('.pulse-dot');
+  if (!statusEl) return;
+  if (online) {
+    statusEl.style.background = 'var(--green-bg)';
+    statusEl.style.color      = 'var(--green)';
+    statusEl.style.borderColor = 'rgba(52,211,153,.2)';
+    if (dotEl) dotEl.style.background = 'var(--green)';
+  } else {
+    statusEl.style.background = 'var(--rose-bg)';
+    statusEl.style.color      = 'var(--rose)';
+    statusEl.style.borderColor = 'rgba(251,113,133,.2)';
+    if (dotEl) dotEl.style.background = 'var(--rose)';
+  }
+  statusEl.innerHTML = `<span class="pulse-dot" style="background:${online?'var(--green)':'var(--rose)'}"></span> ${label}`;
+}
+
+// ── Persistence (Firebase + localStorage fallback) ──
 function loadHandovers() {
+  // Always load from localStorage first (instant)
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    handovers  = raw ? JSON.parse(raw) : [];
+    handovers = raw ? JSON.parse(raw) : [];
   } catch(e) {
     handovers = [];
   }
   render();
+
+  // If Firebase is connected, subscribe to real-time updates
+  if (firebaseConnected) {
+    firebaseRef.on('value', (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        handovers = Object.values(data);
+      } else {
+        handovers = [];
+      }
+      // Also update localStorage as cache
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(handovers));
+      } catch(e) {}
+      render();
+    }, (error) => {
+      console.error('Firebase read error:', error);
+      showToast('⚠️ Error de conexión con la base de datos');
+    });
+  }
 }
 
 function saveLocal() {
+  // Save to localStorage (always, as cache)
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(handovers));
   } catch(e) {
-    showToast('⚠️ No se pudo guardar (almacenamiento lleno)');
+    showToast('⚠️ No se pudo guardar localmente');
   }
+}
+
+function saveToFirebase() {
+  if (!firebaseConnected) {
+    saveLocal();
+    return;
+  }
+  // Convert array to object keyed by id for Firebase
+  const dataObj = {};
+  handovers.forEach(h => { dataObj[h.id] = h; });
+  firebaseRef.set(dataObj)
+    .then(() => {
+      saveLocal(); // also cache locally
+    })
+    .catch((err) => {
+      console.error('Firebase write error:', err);
+      saveLocal(); // fallback to local
+      showToast('⚠️ Sin conexión — guardado localmente');
+    });
 }
 
 // ── DC Navigation ─────────────────────────────────
@@ -851,7 +960,7 @@ function saveHandover() {
       created_at: new Date().toISOString()
     });
   }
-  saveLocal();
+  saveToFirebase();
   closeModal();
   render();
   showToast(`✅ Entrega ${editId?'actualizada':'registrada'} — ${DC_LABELS[dc]}`);
@@ -862,7 +971,7 @@ function quickDelete(id) {
   if (!h) return;
   if (!confirm(`¿Estás seguro de eliminar la entrega de ${h.entrega} → ${h.recibe}?`)) return;
   handovers = handovers.filter(x => x.id !== id);
-  saveLocal();
+  saveToFirebase();
   render();
   showToast('🗑 Entrega eliminada');
 }
@@ -917,21 +1026,34 @@ function getLatestHandover(dc) {
   return handovers.filter(h => h.dc === dc).sort(sortDesc)[0] || null;
 }
 
+function getLatestHandoverToday(dc) {
+  const today = dateKey(new Date());
+  return handovers
+    .filter(h => h.dc === dc && h.fecha === today)
+    .sort(sortDesc)[0] || null;
+}
+
 function updateDCStatus() {
   let allComplete = true;
+  const today = dateKey(new Date());
   DC_LIST.forEach(dc => {
-    const h      = getLatestHandover(dc);
+    const hToday = getLatestHandoverToday(dc);
+    const hAny   = getLatestHandover(dc);
     const card   = document.getElementById('status-' + dc);
     const icon   = document.getElementById('icon-' + dc);
     const detail = document.getElementById('status-detail-' + dc);
-    if (h) {
+    if (hToday) {
       card?.classList.add('complete');
       if (icon) { icon.className = 'dc-status-icon done'; icon.textContent = '✅'; }
-      if (detail) detail.textContent = `${h.entrega} → ${h.recibe} · ${h.fecha} · ${h.turno?.split('(')[0]?.trim()||''}`;
+      if (detail) detail.textContent = `${hToday.entrega} → ${hToday.recibe} · ${hToday.fecha} · ${hToday.turno?.split('(')[0]?.trim()||''}`;
     } else {
       card?.classList.remove('complete');
       if (icon) { icon.className = 'dc-status-icon pending'; icon.textContent = '⏳'; }
-      if (detail) detail.textContent = 'Pendiente — sin entregas registradas';
+      if (hAny) {
+        if (detail) detail.textContent = `Última: ${hAny.fecha} — Falta entrega de hoy`;
+      } else {
+        if (detail) detail.textContent = 'Pendiente — sin entregas registradas';
+      }
       allComplete = false;
     }
   });
@@ -939,12 +1061,12 @@ function updateDCStatus() {
   const subEl = document.getElementById('send-panel-sub');
   if (allComplete) {
     dlBtn.disabled = false;
-    subEl.textContent = '✅ Los 3 Data Centers tienen entregas — listo para generar reporte';
+    subEl.textContent = '✅ Los 3 Data Centers completaron su entrega de hoy — listo para generar reporte';
     subEl.style.color = 'var(--green)';
   } else {
     dlBtn.disabled = true;
-    const pending = DC_LIST.filter(dc => !getLatestHandover(dc));
-    subEl.textContent = `Faltan ${pending.length} DC: ${pending.map(d=>DC_LABELS[d]).join(', ')}`;
+    const pending = DC_LIST.filter(dc => !getLatestHandoverToday(dc));
+    subEl.textContent = `Faltan ${pending.length} DC hoy (${today}): ${pending.map(d=>DC_LABELS[d]).join(', ')}`;
     subEl.style.color = '';
   }
 }
@@ -956,6 +1078,9 @@ function resetApp() {
   try { localStorage.removeItem(STORAGE_KEY); } catch(e) {}
   if (count) localStorage.setItem(COUNTER_KEY, count);
   handovers = [];
+  if (firebaseConnected) {
+    firebaseRef.set(null).catch(e => console.error('Firebase reset error:', e));
+  }
   render();
   showToast('🔄 Sistema reiniciado para el siguiente turno');
 }
