@@ -529,10 +529,9 @@ textarea:focus { outline: none; border-color: currentColor; }
       </div>
       <div class="form-group">
         <label>Turno *</label>
-        <select id="ho-turno" class="filter-input" style="width:100%">
+        <select id="ho-turno" class="filter-input" style="width:100%" disabled>
           <option>8:00-17:45 (Mañana)</option>
           <option>12:30-22:15 (Tarde)</option>
-          <option>22:15-8:00 (Noche)</option>
           <option>08:00-20:00 (PT Día)</option>
           <option>20:00-08:00 (PT Noche)</option>
         </select>
@@ -889,12 +888,12 @@ function openAdd(dc) {
   const sel = document.getElementById('ho-turno');
 
   if (isWeekend) {
-    // Sábado y Domingo: PT Día / PT Noche
+    // Sábado y Domingo: PT Día / PT Noche (Cambio a las 19:00)
     if (h >= 19 || h < 7) sel.value = '20:00-08:00 (PT Noche)';
     else                  sel.value = '08:00-20:00 (PT Día)';
   } else {
-    // Lunes a Viernes: Mañana / Noche
-    if (h >= 21 || h < 7) sel.value = '22:15-8:00 (Noche)';
+    // Lunes a Viernes: Mañana / Tarde (Cambio a las 13:00)
+    if (h >= 13 || h < 7) sel.value = '12:30-22:15 (Tarde)';
     else                  sel.value = '8:00-17:45 (Mañana)';
   }
 
@@ -1255,7 +1254,7 @@ function downloadConsolidatedReport() {
   // ── Header ──
   setFill(doc,'#1A2B4A'); doc.rect(0, 0, PW, HDR, 'F');
   setTxt(doc,'#00BCD4'); doc.setFont('helvetica','bold'); doc.setFontSize(20);
-  doc.text('Informe Consolidado de Entrega de Turno', PW/2, 28, {align:'center'});
+  doc.text('Arranque de Servicios y Entrega de Turno', PW/2, 28, {align:'center'});
   setTxt(doc,'#90A4AE'); doc.setFont('helvetica','normal'); doc.setFontSize(13);
   doc.text(fecha + '  ·  3 Data Centers', PW/2, 44, {align:'center'});
 
