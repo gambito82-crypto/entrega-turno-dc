@@ -529,9 +529,9 @@ textarea:focus { outline: none; border-color: currentColor; }
       </div>
       <div class="form-group">
         <label>Turno *</label>
-        <select id="ho-turno" class="filter-input" style="width:100%" disabled>
+        <select id="ho-turno" class="filter-input" style="width:100%">
           <option>8:00-17:45 (Mañana)</option>
-          <option>12:30-22:15 (Tarde)</option>
+          <option>8:00-17:45 (Noche)</option>
           <option>08:00-20:00 (PT Día)</option>
           <option>20:00-08:00 (PT Noche)</option>
         </select>
@@ -882,20 +882,8 @@ function openAdd(dc) {
 
   const now = new Date();
   document.getElementById('ho-fecha').value = dateKey(now);
-  const h = now.getHours();
-  const dayOfWeek = now.getDay(); // 0=Domingo, 6=Sábado
-  const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
   const sel = document.getElementById('ho-turno');
-
-  if (isWeekend) {
-    // Sábado y Domingo: PT Día / PT Noche (Cambio a las 19:00)
-    if (h >= 19 || h < 7) sel.value = '20:00-08:00 (PT Noche)';
-    else                  sel.value = '08:00-20:00 (PT Día)';
-  } else {
-    // Lunes a Viernes: Mañana / Tarde (Cambio a las 13:00)
-    if (h >= 13 || h < 7) sel.value = '12:30-22:15 (Tarde)';
-    else                  sel.value = '8:00-17:45 (Mañana)';
-  }
+  // El usuario selecciona el turno libremente
 
   populateWorkers(dc);
   ['ho-trabajos','ho-ejecucion','ho-pendientes','ho-observaciones','ho-facility'].forEach(id => {
@@ -1369,7 +1357,7 @@ function sortDesc(a,b) {
 function getShiftClass(turno) {
   if (!turno) return 'dia';
   if (turno.includes('Mañana') || turno.includes('8:00-17'))  return 'manana';
-  if (turno.includes('Tarde')  || turno.includes('12:30'))    return 'tarde';
+  if (turno.includes('Tarde')  || turno.includes('12:30') || turno.includes('Noche') && !turno.includes('PT'))    return 'tarde';
   if (turno.includes('Noche')  && !turno.includes('PT'))      return 'noche';
   if (turno.includes('PT Día') || turno.includes('08:00-20')) return 'ptday';
   if (turno.includes('PT Noche')|| turno.includes('20:00-08'))return 'ptnight';
